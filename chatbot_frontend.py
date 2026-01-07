@@ -67,76 +67,111 @@ selected_thread = None
 # ============================ Sidebar ============================
 st.sidebar.title("LangGraph Chatbot")
 
-# --- Current Chat Settings ---
-st.sidebar.caption(f"Current ID: `{thread_key[:8]}...`")
-
-# Rename Input
-new_title_input = st.sidebar.text_input(
-    "Rename Chat", placeholder="Enter new name", key="rename_input"
-)
-if st.sidebar.button("Update Title"):
-    if new_title_input:
-        rename_thread(thread_key, new_title_input)
-        st.success("Renamed!")
-        st.rerun()  # Refresh to show new name in list
-
-if st.sidebar.button("New Chat", use_container_width=True):
+# --- 0. Global Actions (Top) ---
+if st.sidebar.button("➕ Start New Chat", use_container_width=True, type="primary"):
     reset_chat()
     st.rerun()
 
 st.sidebar.divider()
 
-# Document Info Display
-if thread_docs:
-    latest_doc = list(thread_docs.values())[-1]
-    st.sidebar.success(
-        f"📄 **Active PDF:**\n{latest_doc.get('filename')}\n"
-        f"({latest_doc.get('documents')} pages)"
-    )
-else:
-    st.sidebar.info("No PDF indexed yet.")
+# Helper to find current title early for display
+current_title_obj = next((t for t in threads if t["id"] == thread_key), None)
+current_title_text = (
+    current_title_obj["title"]
+    if current_title_obj and current_title_obj["title"]
+    else f"Thread {thread_key[:8]}..."
+)
 
-# File Uploader
-uploaded_pdf = st.sidebar.file_uploader("Upload a PDF for this chat", type=["pdf"])
-if uploaded_pdf:
-    if uploaded_pdf.name in thread_docs:
-        st.sidebar.info(f"✅ `{uploaded_pdf.name}` loaded.")
+# --- 1. Current Chat Section ---
+st.sidebar.subheader("Current Chat")
+st.sidebar.markdown(f"**{current_title_text}**")
+
+with st.sidebar.expander("📝 Chat Settings & Files", expanded=True):
+    # Rename Input
+    # We use a distinct key logic or just update the value to avoid state conflicts
+    new_title_input = st.text_input(
+        "Rename Chat",
+        value=current_title_text if "Thread" not in current_title_text else "",
+        placeholder="Enter new name",
+        key="rename_input"
+    )
+    if st.button("Update Title"):
+        if new_title_input and new_title_input != current_title_text:
+            rename_thread(thread_key, new_title_input)
+            st.rerun()  # Refresh to show new name in list
+
+    st.markdown("---") 
+
+    # Document Info Display
+    if thread_docs:
+        latest_doc = list(thread_docs.values())[-1]
+        st.success(
+            f"📄 **Active PDF:**\n{latest_doc.get('filename')}\n"
+            f"({latest_doc.get('documents')} pages)"
+        )
     else:
-        with st.sidebar.status("Indexing PDF…", expanded=True) as status_box:
-            summary = ingest_pdf(
-                uploaded_pdf.getvalue(),
-                thread_id=thread_key,
-                filename=uploaded_pdf.name,
-            )
-            thread_docs[uploaded_pdf.name] = summary
-            status_box.update(label="✅ PDF indexed", state="complete", expanded=False)
+        st.info("No PDF indexed yet.")
+
+    # File Uploader
+    uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
+    if uploaded_pdf:
+        if uploaded_pdf.name in thread_docs:
+            st.info(f"✅ `{uploaded_pdf.name}` loaded.")
+        else:
+            with st.status("Indexing PDF…", expanded=True) as status_box:
+                summary = ingest_pdf(
+                    uploaded_pdf.getvalue(),
+                    thread_id=thread_key,
+                    filename=uploaded_pdf.name,
+                )
+                thread_docs[uploaded_pdf.name] = summary
+                status_box.update(label="✅ PDF indexed", state="complete", expanded=False)
 
 st.sidebar.divider()
+
+# --- 2. Navigation Section (Bottom) ---
 st.sidebar.subheader("Past Conversations")
 
 if not threads:
     st.sidebar.caption("No past conversations.")
 else:
-    for t_data in threads:
+    # Separation Logic: Pin Current Thread to Top
+    active_thread_data = next((t for t in threads if t["id"] == thread_key), None)
+    other_threads = [t for t in threads if t["id"] != thread_key]
+
+    # Helper to render a thread button
+    def render_thread_button(t_data, is_active=False):
         t_id = t_data["id"]
         t_title = t_data["title"]
-
-        # Display logic: Custom Title OR "Thread [first 8 chars]"
         label = t_title if t_title else f"Thread {str(t_id)[:8]}..."
-
+        # Active is already distinguished by position, but let's keep style subtle or same
+        # Actually, user requested "current chat over past conversation should appear top and different colour"
+        # Since we have "Current Chat" section at top, the list item is redundant BUT useful for switching back if we scroll down.
+        # Let's keep it but maybe differentiate style.
+        b_type = "secondary" # We use secondary for list items usually
+        if is_active:
+             b_type = "primary"
+        
         if st.sidebar.button(
-            label, key=f"side-thread-{t_id}", use_container_width=True
+            label, key=f"side-thread-{t_id}", use_container_width=True, type=b_type
         ):
-            selected_thread = t_id
+             return t_id
+        return None
+
+    # Render Active First (Pinned)
+    if active_thread_data:
+        clicked_id = render_thread_button(active_thread_data, is_active=True)
+        # No action needed as it's already selected
+
+    # Render Others
+    for t_data in other_threads:
+        clicked_id = render_thread_button(t_data, is_active=False)
+        if clicked_id:
+            selected_thread = clicked_id
 
 # ============================ Main Layout ========================
-# Helper to find current title for Main Title display
-current_title_obj = next((t for t in threads if t["id"] == thread_key), None)
-main_title = (
-    current_title_obj["title"]
-    if current_title_obj and current_title_obj["title"]
-    else "Multi Utility Chatbot (Async)"
-)
+# Main Title uses the pre-calculated text
+main_title = current_title_text
 
 st.title(main_title)
 

@@ -279,20 +279,36 @@ async def _retrieve_all_threads_async():
     """Async helper to get all thread IDs and their titles."""
     async with _get_patched_saver() as checkpointer:
         all_threads = set()
-        async for checkpoint in checkpointer.alist(None):
-            all_threads.add(checkpoint.config["configurable"]["thread_id"])
+        
+        # 1. Get threads with history (checkpoints)
+        try:
+            async for checkpoint in checkpointer.alist(None):
+                all_threads.add(checkpoint.config["configurable"]["thread_id"])
+        except Exception:
+            pass # Handle case where checkpoint table might be empty/init issues
 
-        # Now fetch titles for these threads
         conn = checkpointer.conn
+        
+        # 2. Get threads that have explicitly named titles (even if no history yet)
+        # We need to ensure the table exists or handle error if simpler
+        try:
+            async with conn.execute("SELECT thread_id FROM thread_titles") as cursor:
+                async for row in cursor:
+                    all_threads.add(row[0])
+        except Exception:
+            pass # Table might not exist yet if no renames happened
+
+        # 3. Fetch titles for these threads
         titles = {}
         if all_threads:
             placeholders = ",".join("?" for _ in all_threads)
-            async with conn.execute(
-                f"SELECT thread_id, title FROM thread_titles WHERE thread_id IN ({placeholders})",
-                list(all_threads),
-            ) as cursor:
-                async for row in cursor:
-                    titles[row[0]] = row[1]
+            query = f"SELECT thread_id, title FROM thread_titles WHERE thread_id IN ({placeholders})"
+            try:
+                async with conn.execute(query, list(all_threads)) as cursor:
+                    async for row in cursor:
+                        titles[row[0]] = row[1]
+            except Exception:
+                pass
 
         result = []
         for tid in all_threads:
