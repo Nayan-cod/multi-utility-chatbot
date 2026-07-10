@@ -12,7 +12,7 @@ mcp = FastMCP("scholar_tools")
 
 
 @mcp.tool()
-def search_google_scholar(query: str, limit: int = 5) -> str:
+def search_google_scholar(query: str, limit: int = 1) -> str:
     """
     Search Google Scholar using SerpApi (Reliable & No Blocks).
     """
