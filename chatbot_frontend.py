@@ -10,7 +10,8 @@ from chatbot_backend import (
     retrieve_all_threads,
     thread_document_metadata,
     get_thread_history,
-    rename_thread,  # <--- New Import
+    rename_thread,
+    get_mcp_error,
 )
 
 
@@ -168,6 +169,14 @@ else:
         clicked_id = render_thread_button(t_data, is_active=False)
         if clicked_id:
             selected_thread = clicked_id
+
+st.sidebar.divider()
+st.sidebar.subheader("System Status")
+mcp_err = get_mcp_error()
+if mcp_err:
+    st.sidebar.error(f"MCP Load Failure:\n{mcp_err}")
+else:
+    st.sidebar.success("MCP Servers Connected")
 
 # ============================ Main Layout ========================
 # Main Title uses the pre-calculated text

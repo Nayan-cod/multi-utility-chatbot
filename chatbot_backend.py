@@ -72,6 +72,8 @@ async def _init_mcp_client():
     return await client.get_tools()
 
 
+mcp_load_error = None
+
 # Load tools and wrap them for thread safety
 try:
     print("Attempting to connect to MCP Servers...")
@@ -97,9 +99,15 @@ try:
         print(f"[SUCCESS] MCP Tools successfully loaded: {[t.name for t in mcp_tools]}")
     else:
         print("[WARNING] Connected to MCP, but no tools were returned.")
+        mcp_load_error = "Connected to MCP, but no tools were returned."
 except Exception as e:
     print(f"[ERROR] Failed to load MCP tools: {e}")
+    mcp_load_error = str(e)
     mcp_tools = []
+
+
+def get_mcp_error():
+    return mcp_load_error
 
 # -------------------
 # 2. Tools & LLM
