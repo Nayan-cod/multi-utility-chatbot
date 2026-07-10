@@ -1,0 +1,33 @@
+# --- Frontend (Streamlit) ---
+streamlit
+ddgs
+# --- LangChain & LangGraph Ecosystem ---
+langchain
+langchain-core
+langchain-community
+langchain-huggingface
+langchain-text-splitters
+langchain-mcp-adapters
+langgraph
+langgraph-checkpoint-sqlite
+
+# --- Model Context Protocol (MCP) ---
+# Required for mcp_server.py and scholar_server.py
+mcp
+
+# --- Vector Store & RAG Dependencies ---
+# faiss-cpu is recommended for compatibility (use faiss-gpu if you have CUDA)
+faiss-cpu
+# Required by PyPDFLoader in chatbot_backend.py
+pypdf
+
+# --- External Tools & APIs ---
+# Required by DuckDuckGoSearchRun
+duckduckgo-search
+# Required by scholar_server.py (serpapi import)
+google-search-results
+
+# --- Utilities & Database ---
+python-dotenv
+requests
+aiosqlite
