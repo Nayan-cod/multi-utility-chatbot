@@ -21,6 +21,7 @@ from langchain_huggingface import (
     HuggingFaceEndpoint,
     HuggingFaceEndpointEmbeddings,
 )
+from langchain_groq import ChatGroq
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
@@ -179,9 +180,14 @@ def get_stock_price(symbol: str) -> dict:
 
 tools = [search_tool, get_stock_price, *mcp_tools, rag_tool]
 
-# Setup Model
-llm_endpoint = HuggingFaceEndpoint(repo_id="deepseek-ai/DeepSeek-V3.2")
-model = ChatHuggingFace(llm=llm_endpoint)
+# Setup Groq Model
+model = ChatGroq(
+    model="openai/gpt-oss-120b",
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.2,
+)
+
+# Bind existing tools to the model
 llm_with_tools = model.bind_tools(tools)
 
 

@@ -5,6 +5,7 @@ ddgs
 langchain
 langchain-core
 langchain-community
+langchain-groq
 langchain-huggingface
 langchain-text-splitters
 langchain-mcp-adapters

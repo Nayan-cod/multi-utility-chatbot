@@ -1,0 +1,169 @@
+================================================================================
+          MULTI-UTILITY CHATBOT WITH RAG & MCP - INTERVIEW PREPARATION GUIDE
+================================================================================
+
+This document provides a detailed, technical, step-by-step breakdown of how the Multi-Utility Chatbot works internally. It includes architectural details, technical advantages, areas for future improvement, and a dedicated Questions & Answers section to help you confidently explain the project in interviews.
+
+---
+1. HIGH-LEVEL PROJECT OVERVIEW
+---
+The project is a state-of-the-art conversational agent built on LangGraph (for orchestrating agent states and execution graphs), LangChain (for LLM abstraction, tool creation, and vector store helpers), Streamlit (for a lightweight, interactive user interface), and the Model Context Protocol (MCP) (to execute external utility servers like calculation and academic research tools).
+
+Key Features:
+1. Stateful Multi-Turn Conversations: Powered by an SQLite-backed checkpointer.
+2. Web Search & Stock Prices: Live integrations using DuckDuckGo and AlphaVantage.
+3. PDF Ingestion & RAG (Retrieval-Augmented Generation): Extract, split, embed, and search PDFs.
+4. Extensible Utility Servers (MCP):
+   - Arithmetic server: Solves mathematical operations locally.
+   - Google Scholar server: Pulls academic research papers using SerpApi with token-optimized limits and formats.
+
+---
+2. SYSTEM ARCHITECTURE & COMPONENTS
+---
+The system is divided into four main layers:
+
+                  +-----------------------------------+
+                  |        Streamlit Frontend         |
+                  |       (chatbot_frontend.py)       |
+                  +-----------------+-----------------+
+                                    |
+                                    v (Python API calls / asyncio.run)
+                  +-----------------+-----------------+
+                  |         Chatbot Backend           |
+                  |       (chatbot_backend.py)        |
+                  +-------+---------+---------+-------+
+                          |         |         |
+      (SQLite Checkpoints)|         |         | (MCP stdio connection)
+                          v         |         v
+     +--------------------+--+      |     +---+----------------------------+
+     |     SQLite Database    |      |     | MCP Servers:                   |
+     |     (my_chatbot.db)    |      |     | - arithmetic (mcp_server.py)   |
+     +-----------------------+      |     | - scholar (scholar_server.py)  |
+                                    |     +--------------------------------+
+                                    v (RAG In-Memory)
+                       +------------+------------+
+                       |   FAISS Vector Index    |
+                       | (MiniLM-L6-v2 Embeddings)|
+                       +-------------------------+
+
+1. Streamlit Frontend (chatbot_frontend.py):
+   Handles rendering the chat screen, session state storage (active thread ID, uploaded PDF names), chat sidebar (new chat, rename chat, document indexing indicator, and conversation history), and captures user messages.
+   
+2. Chatbot Backend (chatbot_backend.py):
+   Contains the LangGraph graph configuration, the LLM model client (DeepSeek-V3 on Hugging Face Serverless Inference API), embedding generation, database helper scripts, and imports the MCP clients.
+
+3. Database (my_chatbot.db):
+   Stores conversation state history (checkpoints) and custom metadata (thread_titles) to enable session reloads and UI customization.
+
+4. Model Context Protocol (MCP) Servers:
+   Sub-processes spawned directly by the backend over standard input/output (stdio) channels.
+   - `mcp_server.py`: Performs basic arithmetic locally.
+   - `scholar_server.py`: Interfaces with the Google Scholar SerpApi to search academic publications.
+
+---
+3. STEP-BY-STEP INTERNAL EXECUTION FLOW
+---
+
+Phase A: Startup & Initialization
+1. When `chatbot_backend.py` is imported, it fires up an asynchronous background thread running an event loop (`_ASYNC_LOOP`) to execute async routines within Streamlit's sync context.
+2. It initializes the `MultiServerMCPClient` pointing to two servers:
+   - "arithmetic": Spawns `mcp_server.py` in a separate process.
+   - "scholar": Spawns `scholar_server.py` in a separate process.
+3. The client connects to both servers via stdin/stdout, fetches their tool definitions dynamically using `get_tools()`, and registers them as LangChain-compatible `StructuredTool` objects inside the `tools` array.
+4. Streamlit UI loads, initializes a session thread ID (`thread_id`), and fetches past conversations from the SQLite database.
+
+Phase B: Ingesting a PDF (RAG Pipeline)
+1. The user uploads a PDF in the Streamlit sidebar.
+2. The UI reads the raw file bytes and passes them to `ingest_pdf()` in the backend.
+3. Inside `ingest_pdf()`:
+   a. Bytes are written to a temporary local `.pdf` file.
+   b. `PyPDFLoader` parses the PDF text page-by-page.
+   c. `RecursiveCharacterTextSplitter` divides the document into small chunks (chunk size: 1000 characters, overlap: 200 characters) to preserve context.
+   d. The chunks are processed by `HuggingFaceEndpointEmbeddings` using the `sentence-transformers/all-MiniLM-L6-v2` model to generate 384-dimensional vector representations.
+   e. The embeddings are indexed into an in-memory `FAISS` vector store.
+   f. The vector retriever is mapped to the current `thread_id` inside `_THREAD_RETRIEVERS`.
+
+Phase C: User Message & Graph Inference
+1. The user types a message (e.g., "Find papers on Deep Learning").
+2. Streamlit reads the chat graph asynchronously via the `get_chatbot_graph()` context manager. This manager compiles the graph with an SQLite checkpoint saver (`AsyncSqliteSaver`) to track states.
+3. The graph starts at `START` and executes the node `chat_node`.
+4. Inside `chat_node`:
+   a. A `SystemMessage` is pre-pended, instructing the model how to use the search engines, RAG tool, and math solvers.
+   b. The model (`ChatHuggingFace(DeepSeek-V3)`) is invoked with `llm_with_tools.ainvoke([sys_msg, *messages])`.
+5. The LLM responds in one of two ways:
+   - Direct Response: Returns standard conversational text. The graph routes to `END`.
+   - Tool Call: Returns a request to execute a tool (e.g., calling `search_google_scholar(query='Deep Learning')`).
+6. If a Tool Call is returned, `tools_condition` routes the flow to the `tools` node.
+7. The `ToolNode` matches the requested tool name and executes it:
+   - If `search_google_scholar` is called, it makes an HTTP request to SerpApi, parses organic results, formats title, link, summary, and truncated snippet, and returns the text result.
+8. The tool's output is wrapped as a `ToolMessage` and returned back to the `chat_node`.
+9. The LLM reviews the tool's answer, synthesizes a final response, and the graph routes to `END`.
+10. All messages and states are automatically saved to `my_chatbot.db` under the current `thread_id`.
+
+---
+4. DETAILED TECHNICAL STACK
+---
+- Core Orchestrator: LangGraph (StateGraph, ToolNode, tools_condition)
+- LLM Integration: LangChain, langchain-huggingface, langchain-community
+- LLM Model: DeepSeek-V3 / DeepSeek-V3.2 (via HuggingFace serverless endpoint)
+- Embedding Model: sentence-transformers/all-MiniLM-L6-v2 (384-dimension dense vectors)
+- Vector Store: FAISS (Facebook AI Similarity Search) - local in-memory instance
+- MCP Implementation: Model Context Protocol (FastMCP Python SDK, MultiServerMCPClient)
+- UI: Streamlit (maintains chat flow, renders markdown, handles PDF upload & inputs)
+- Database: SQLite (via python standard sqlite3 & aiosqlite for asynchronous DB I/O)
+- APIs used: SerpApi (Google Scholar Search), AlphaVantage (Stock Market data)
+
+---
+5. KEY ARCHITECTURAL ADVANTAGES
+---
+- Strict State Control: Unlike traditional LLM loops which can run indefinitely, LangGraph enforces state transitions using a formal directed acyclic graph (DAG) structure. This makes it production-ready, debuggable, and reliable.
+- Decoupled Capabilities via MCP: The Model Context Protocol splits heavy integrations out of the main LLM. Instead of packing all math libraries or SerpApi keys directly into the backend code, they are hosted as isolated MCP servers. If the scholar server fails or needs an update, the main chatbot backend continues running without interruption.
+- Persistent Session Memory: Utilizing `AsyncSqliteSaver`, the model remembers past interactions across page refreshes. The SQLite connection is patched on-the-fly (`conn.is_alive = lambda: True`) to prevent threading issues during high-concurrency loops in Streamlit.
+- Optimized Token Footprint: By limiting Google Scholar search parameters (`search_limit = min(max(1, limit), 3)`) and aggressively truncating snippet strings to `120 characters`, the system reduces context token usage, avoiding 402/payment limit errors and decreasing runtime inference costs.
+
+---
+6. WHAT CAN BE IMPROVED (PAIN POINTS & FUTURE SCOPE)
+---
+- Vector Store Persistence: Currently, FAISS stores the PDF index in RAM (`_THREAD_RETRIEVERS` dictionary). If the Streamlit application restarts, the vector stores are lost, and the user must re-upload their PDFs. Implementing a persistent vector DB (like Chroma, Qdrant, or Pgvector) would solve this.
+- Asynchronous File Loading: The ingestion of massive PDFs can block the single background event loop thread. Offloading file parsing to a Celery queue or process-pool worker would make the app highly scalable.
+- Token Budgeting System: While we truncate scholar outputs, long conversation histories can still exhaust the LLM's context window. Adding a rolling memory mechanism (like summarizing older messages or removing messages older than N turns) would keep tokens bounded.
+- Local LLM fallback: If HuggingFace Serverless Endpoint returns error codes (like 402 or 503), the backend should automatically redirect tool execution to a locally hosted model running via Ollama/Llama.cpp.
+
+---
+7. INTERVIEW QUESTIONS AND ANSWERS (Q&A)
+---
+
+Q1: Why did you choose LangGraph over standard LangChain Chains or Agents?
+A1: Traditional LangChain agents operate as black boxes, making it hard to control state transitions or restrict routing. LangGraph allows us to define the conversation as a stateful graph where nodes represent computational steps (like LLM calls or tool execution) and edges enforce conditional logic. This provides precise control over the agent's behavior, simplifies debugging, and enables clean database state persistence.
+
+Q2: How does the SQLite persistence layer work in this project?
+A2: We use LangGraph's `AsyncSqliteSaver` which stores conversation checkpoints in a local SQLite database (`my_chatbot.db`). In `chatbot_backend.py`, we implemented a connection manager patch `_get_patched_saver()`. Because Streamlit creates a new thread for each session, standard SQLite connections often throw threading errors. We patched the connection by dynamically attaching an `is_alive` property: `conn.is_alive = lambda: True`. This makes the connection look "alive" to the saver, resolving connection pooling issues.
+
+Q3: What is the Model Context Protocol (MCP) and how does it communicate with the servers?
+A3: MCP is an open-source protocol developed to standardize how LLMs connect to external resources (like data sources, APIs, or local dev tools). In this project, the chatbot backend behaves as an MCP client. When starting up, it spawns separate sub-processes (`mcp_server.py` and `scholar_server.py`) using `stdio` (standard input/output streams) as the transport layer. The client queries the server for tools, gets JSON-schema tool schemas, and binds them to the LLM. 
+
+Q4: What was the recent token/pricing problem with Google Scholar, and how did you resolve it?
+A4: Originally, the Google Scholar tool pulled full organic search results, including full snippets, publication summaries, and abstracts. When multiple search results were returned, it bloated the token count in the LLM context, leading to higher API costs and hitting token limit thresholds.
+I resolved this by:
+1. Hard-capping the search limit inside `scholar_server.py` to a maximum of 3 (`min(max(1, limit), 3)`).
+2. Truncating the `snippet` field to a maximum of 120 characters.
+3. Rewriting the return string to format only essential fields (Title, Link, Info, Snippet) while dropping bulky abstract headers, drastically cutting token usage.
+
+Q5: How does the RAG pipeline handle document indexing and retrieval?
+A5: When a PDF is uploaded, it is read into memory and divided into chunks of 1000 characters with 200 characters overlap using `RecursiveCharacterTextSplitter`. These chunks are converted into dense vector embeddings using Hugging Face's `all-MiniLM-L6-v2` model and loaded into a `FAISS` vector search index. During conversation, the `rag_tool` queries this FAISS index using cosine similarity to fetch the top 4 most relevant text chunks, which are fed into the LLM context.
+
+Q6: What happens if Hugging Face returns a '402 Payment Required' or quota error?
+A6: This error occurs when the free monthly inference credits on the Hugging Face Serverless endpoint are depleted. To resolve this, we can easily change the LLM endpoint or swap the underlying provider in `chatbot_backend.py` (e.g., to Google Gemini via `langchain-google-genai` or OpenAI's API) since the backend uses standardized LangChain classes (`BaseChatModel`). The change is highly localized because the rest of the application references the abstract `model` and `llm_with_tools` interface.
+
+Q7: Why does the project use an asynchronous loop inside a Streamlit application?
+A7: Streamlit runs entirely synchronously on a loop and executes the script from top to bottom on every user interaction. On the other hand, LangGraph and MCP are designed to be asynchronous to support non-blocking I/O operations. To bridge this, the backend starts a dedicated background thread running a persistent Python asyncio event loop (`_ASYNC_LOOP`). Synchronous Streamlit functions can then schedule and wait for async graph executions using `asyncio.run_coroutine_threadsafe()`.
+
+Q8: How does the Google Scholar server avoid scraping blocks?
+A8: Web scraping Google Scholar directly is extremely prone to IP blocks and CAPTCHAs. To bypass this, the `scholar_server.py` uses SerpApi's `GoogleSearch` module. SerpApi acts as a proxy, rendering search engines on real browsers and returning structured JSON outputs, which ensures high reliability and zero downtime.
+
+Q9: What is the purpose of the `thread_titles` table in SQLite?
+A9: Although LangGraph's checkpointer tracks message history per `thread_id`, it does not store human-readable names for the conversation threads. We created a custom table called `thread_titles` containing `thread_id` and `title`. In the Streamlit sidebar, we queries this table so the user can easily view, rename, and navigate their past conversation threads.
+
+Q10: What are the security benefits of using standard I/O (stdio) transport for MCP?
+A10: In a stdio transport configuration, the MCP server is spawned as a child process of the main application. Communication happens entirely in-memory using stdout/stdin pipes. This means the MCP tools do not expose network ports, requiring no firewall configurations or authorization tokens, making the setup highly secure from external network attacks.
+================================================================================
