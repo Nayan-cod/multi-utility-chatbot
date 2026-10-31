@@ -110,10 +110,50 @@ except Exception as e:
 def get_mcp_error():
     return mcp_load_error
 
-# -------------------
-# 2. Tools & LLM
-# -------------------
-search_tool = DuckDuckGoSearchRun(region="us-en")
+@tool("duckduckgo_search")
+def search_tool(query: str) -> str:
+    """Search the web for current events, news, and general real-time information."""
+    # 1. Try DuckDuckGo text search
+    try:
+        from ddgs import DDGS
+        results = list(DDGS(timeout=5).text(query, max_results=3))
+        if results:
+            return "\n\n".join(
+                f"[{r.get('title')}]({r.get('href')}): {r.get('body')}"
+                for r in results
+            )
+    except Exception:
+        pass
+
+    # 2. Try DuckDuckGo news search
+    try:
+        from ddgs import DDGS
+        results = list(DDGS(timeout=5).news(query, max_results=3))
+        if results:
+            return "\n\n".join(
+                f"[{r.get('title')}]({r.get('url')}): {r.get('body')}"
+                for r in results
+            )
+    except Exception:
+        pass
+
+    # 3. Fallback to SerpApi (Google Search) if DuckDuckGo times out or is blocked
+    serp_key = os.getenv("SERPAPI_API_KEY")
+    if serp_key:
+        try:
+            from serpapi import GoogleSearch
+            params = {"q": query, "api_key": serp_key, "num": 3}
+            search = GoogleSearch(params)
+            organic = search.get_dict().get("organic_results", [])
+            if organic:
+                return "\n\n".join(
+                    f"[{item.get('title')}]({item.get('link')}): {item.get('snippet', '')}"
+                    for item in organic
+                )
+        except Exception as e:
+            return f"Search fallback error: {e}"
+
+    return "No search results could be retrieved at this time."
 
 embeddings = HuggingFaceEndpointEmbeddings(
     model="sentence-transformers/all-MiniLM-L6-v2",
@@ -203,6 +243,8 @@ async def chat_node(state: ChatState, config=None):
     sys_msg = SystemMessage(
         content=(
             "You are a helpful assistant. "
+            "Use 'duckduckgo_search' for current web searches, real-time facts, and news. "
+            "Use 'get_stock_price' for stock market prices. "
             "Use 'search_google_scholar' for research papers. "
             "Use 'rag_tool' for uploaded PDFs. "
             "Use 'add' or 'multiply' for math. "
@@ -215,7 +257,7 @@ async def chat_node(state: ChatState, config=None):
     return {"messages": [response]}
 
 
-tool_node = ToolNode(tools)
+tool_node = ToolNode(tools, handle_tool_errors=True)
 
 # Define Graph Layout
 graph_builder = StateGraph(ChatState)
