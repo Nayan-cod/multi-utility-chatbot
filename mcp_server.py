@@ -42,7 +42,7 @@ async def multiply(a: float, b: float) -> float:
 async def divide(a: float, b: float) -> float:
     """Divide a by b (a / b)"""
     if as_number(b) == 0:
-        return "Error: Division by zero"
+        raise ValueError("Division by zero")
     return as_number(a) / as_number(b)
 
 

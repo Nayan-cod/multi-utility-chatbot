@@ -6,7 +6,7 @@ langchain
 langchain-core
 langchain-community
 langchain-groq
-langchain-huggingface
+langchain-google-genai
 langchain-text-splitters
 langchain-mcp-adapters
 langgraph
@@ -19,12 +19,10 @@ mcp
 # --- Vector Store & RAG Dependencies ---
 # faiss-cpu is recommended for compatibility (use faiss-gpu if you have CUDA)
 faiss-cpu
-# Required by PyPDFLoader in chatbot_backend.py
-pypdf
+# Required by OpenDataLoaderPDFLoader in chatbot_backend.py
+langchain-opendataloader-pdf
 
 # --- External Tools & APIs ---
-# Required by DuckDuckGoSearchRun
-duckduckgo-search
 # Required by scholar_server.py (serpapi import)
 google-search-results
 

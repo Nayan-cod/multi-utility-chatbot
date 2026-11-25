@@ -11,6 +11,7 @@ from chatbot_backend import (
     thread_document_metadata,
     get_thread_history,
     rename_thread,
+    delete_thread,
     get_mcp_error,
 )
 
@@ -25,6 +26,19 @@ def reset_chat():
     st.session_state["thread_id"] = thread_id
     add_thread({"id": thread_id, "title": None})
     st.session_state["message_history"] = []
+
+
+def handle_delete_thread(target_thread_id: str):
+    """Delete a thread and reset state if it was currently active."""
+    tid = str(target_thread_id)
+    delete_thread(tid)
+    st.session_state["ingested_docs"].pop(tid, None)
+    st.session_state["chat_threads"] = [
+        t for t in st.session_state.get("chat_threads", []) if str(t["id"]) != tid
+    ]
+    if tid == str(st.session_state.get("thread_id")):
+        reset_chat()
+    st.rerun()
 
 
 def add_thread(thread_data):
@@ -61,6 +75,14 @@ if not current_thread_exists:
 thread_key = str(st.session_state["thread_id"])
 thread_docs = st.session_state["ingested_docs"].setdefault(thread_key, {})
 
+# Hydrate persisted PDF metadata on refresh or thread switch
+if not thread_docs:
+    persisted_meta = thread_document_metadata(thread_key)
+    for file_meta in persisted_meta.get("files", []):
+        fname = file_meta.get("filename")
+        if fname:
+            thread_docs[fname] = file_meta
+
 # Sort threads: You might want to sort by timestamp if available, but for now reverse ID is ok
 threads = st.session_state["chat_threads"][::-1]
 selected_thread = None
@@ -96,20 +118,25 @@ with st.sidebar.expander("📝 Chat Settings & Files", expanded=True):
         placeholder="Enter new name",
         key="rename_input"
     )
-    if st.button("Update Title"):
-        if new_title_input and new_title_input != current_title_text:
-            rename_thread(thread_key, new_title_input)
-            st.rerun()  # Refresh to show new name in list
+    action_col1, action_col2 = st.columns(2)
+    with action_col1:
+        if st.button("Update Title", use_container_width=True):
+            if new_title_input and new_title_input != current_title_text:
+                rename_thread(thread_key, new_title_input)
+                st.rerun()  # Refresh to show new name in list
+    with action_col2:
+        if st.button("🗑️ Delete Chat", use_container_width=True, key="delete_current_chat"):
+            handle_delete_thread(thread_key)
 
     st.markdown("---") 
 
     # Document Info Display
     if thread_docs:
-        latest_doc = list(thread_docs.values())[-1]
-        st.success(
-            f"📄 **Active PDF:**\n{latest_doc.get('filename')}\n"
-            f"({latest_doc.get('documents')} pages)"
-        )
+        doc_lines = [
+            f"- **{doc.get('filename')}** ({doc.get('documents')} pages)"
+            for doc in thread_docs.values()
+        ]
+        st.success("📄 **Active PDF(s):**\n" + "\n".join(doc_lines))
     else:
         st.info("No PDF indexed yet.")
 
@@ -120,13 +147,21 @@ with st.sidebar.expander("📝 Chat Settings & Files", expanded=True):
             st.info(f"✅ `{uploaded_pdf.name}` loaded.")
         else:
             with st.status("Indexing PDF…", expanded=True) as status_box:
-                summary = ingest_pdf(
-                    uploaded_pdf.getvalue(),
-                    thread_id=thread_key,
-                    filename=uploaded_pdf.name,
-                )
-                thread_docs[uploaded_pdf.name] = summary
-                status_box.update(label="✅ PDF indexed", state="complete", expanded=False)
+                try:
+                    summary = ingest_pdf(
+                        uploaded_pdf.getvalue(),
+                        thread_id=thread_key,
+                        filename=uploaded_pdf.name,
+                    )
+                    thread_docs[uploaded_pdf.name] = summary.get("latest_file", summary)
+                    status_box.update(
+                        label="✅ PDF indexed", state="complete", expanded=False
+                    )
+                except Exception as e:
+                    status_box.update(
+                        label="❌ PDF indexing failed", state="error", expanded=True
+                    )
+                    st.error(str(e))
 
 st.sidebar.divider()
 
@@ -140,24 +175,24 @@ else:
     active_thread_data = next((t for t in threads if t["id"] == thread_key), None)
     other_threads = [t for t in threads if t["id"] != thread_key]
 
-    # Helper to render a thread button
+    # Helper to render a thread button with delete action
     def render_thread_button(t_data, is_active=False):
         t_id = t_data["id"]
         t_title = t_data["title"]
         label = t_title if t_title else f"Thread {str(t_id)[:8]}..."
-        # Active is already distinguished by position, but let's keep style subtle or same
-        # Actually, user requested "current chat over past conversation should appear top and different colour"
-        # Since we have "Current Chat" section at top, the list item is redundant BUT useful for switching back if we scroll down.
-        # Let's keep it but maybe differentiate style.
-        b_type = "secondary" # We use secondary for list items usually
-        if is_active:
-             b_type = "primary"
-        
-        if st.sidebar.button(
-            label, key=f"side-thread-{t_id}", use_container_width=True, type=b_type
-        ):
-             return t_id
-        return None
+        b_type = "primary" if is_active else "secondary"
+
+        col_btn, col_del = st.sidebar.columns([0.8, 0.2])
+        clicked = None
+        with col_btn:
+            if st.button(
+                label, key=f"side-thread-{t_id}", use_container_width=True, type=b_type
+            ):
+                clicked = t_id
+        with col_del:
+            if st.button("🗑️", key=f"del-thread-{t_id}", use_container_width=True, help="Delete chat"):
+                handle_delete_thread(t_id)
+        return clicked
 
     # Render Active First (Pinned)
     if active_thread_data:
